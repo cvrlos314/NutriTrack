@@ -1259,7 +1259,7 @@ async function callGemini(prompt, imageBlob) {
     showGeminiKeyPrompt();
     throw new Error('no_key');
   }
-  const model = 'gemini-3.8-flash';
+  const model = 'gemini-flash-latest';
   const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${key}`;
 
   let parts = [{ text: prompt }];
