@@ -751,9 +751,14 @@ const todayKey = () => userKey('entries_' + TODAY());
   document.getElementById('navDate').textContent =
     d.toLocaleDateString('es-PE',{weekday:'long',day:'numeric',month:'long'});
 
-  // Sin login — abre directo
-  currentUser = { email: 'local', name: 'Usuario', picture: '' };
-  await onUserReady();
+  // Comprueba sesión guardada
+  const savedUser = loadUser();
+  if (savedUser) {
+    currentUser = savedUser;
+    await onUserReady();
+  } else {
+    initGoogleAuth();
+  }
 })();
 
 function initGoogleAuth() {
