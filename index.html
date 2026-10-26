@@ -1369,7 +1369,7 @@ Responde SOLO en JSON (sin markdown): {"nombre":"...","kcal":0,"prot":0,"carbs":
     btn.disabled = false;
   } catch(err) {
     if (err.message !== 'no_key') {
-      res.textContent = '⚠️ No pude estimar. Intenta ser más específico o usa entrada manual.';
+      res.textContent = '⚠️ Error: ' + err.message;
       btn.textContent = '🔄 Reintentar';
       btn.disabled = false;
     } else {
