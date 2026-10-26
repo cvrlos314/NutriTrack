@@ -1246,62 +1246,105 @@ function handlePhoto(e) {
   document.getElementById('analysisResult').classList.remove('show');
 }
 
+function getGeminiKey() {
+  try { return localStorage.getItem(userKey('nt_gemini_key')) || ''; } catch(e) { return ''; }
+}
+function saveGeminiKey(k) {
+  try { localStorage.setItem(userKey('nt_gemini_key'), k); } catch(e) {}
+}
+
+async function callGemini(prompt, imageBlob) {
+  const key = getGeminiKey();
+  if (!key) {
+    showGeminiKeyPrompt();
+    throw new Error('no_key');
+  }
+  const model = imageBlob ? 'gemini-1.5-flash' : 'gemini-1.5-flash';
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${key}`;
+
+  let parts = [{ text: prompt }];
+  if (imageBlob) {
+    const b64 = await new Promise(resolve => {
+      const reader = new FileReader();
+      reader.onload = e => resolve(e.target.result.split(',')[1]);
+      reader.readAsDataURL(imageBlob);
+    });
+    parts = [{ inline_data: { mime_type: imageBlob.type, data: b64 } }, { text: prompt }];
+  }
+
+  const resp = await fetch(url, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ contents: [{ parts }] })
+  });
+  if (!resp.ok) {
+    const err = await resp.json();
+    if (resp.status === 400 || resp.status === 403) {
+      showGeminiKeyPrompt('API key inválida. Ingresa una key válida.');
+    }
+    throw new Error(err.error?.message || 'gemini_error');
+  }
+  const data = await resp.json();
+  return data.candidates?.[0]?.content?.parts?.[0]?.text || '';
+}
+
+function showGeminiKeyPrompt(msg) {
+  const current = getGeminiKey();
+  const key = window.prompt(
+    (msg || '') + '\n\nIngresa tu API key de Google Gemini.\n(Obtén una gratis en aistudio.google.com/apikey)',
+    current
+  );
+  if (key && key.trim()) {
+    saveGeminiKey(key.trim());
+    showToast('✅ API key guardada');
+    return true;
+  }
+  return false;
+}
+
 async function analyzePhoto() {
   if (!photoBlob) return;
-  if (!sample) {
-    showToast('IA no disponible, usa entrada manual');
-    return;
-  }
   const btn = document.getElementById('analyzeBtn');
   btn.disabled = true;
   btn.innerHTML = '<span class="spinner"></span> Analizando<span class="thinking-dots"></span>';
   const res = document.getElementById('analysisResult');
   res.classList.add('show');
-  res.textContent = '';
+  res.textContent = 'Analizando imagen...';
 
   try {
-    const limits = await sample.limits();
-    if (!limits.images) throw new Error('no_images');
-
     const prompt = `Eres un nutricionista experto. Analiza esta foto de comida y estima:
-1. Nombre del plato/alimento
-2. Calorías totales (kcal)
+1. Nombre del plato
+2. Calorías (kcal)
 3. Proteínas (g)
 4. Carbohidratos (g)
 5. Grasas (g)
+Considera comida peruana/latinoamericana si aplica.
+Responde SOLO en JSON (sin markdown): {"nombre":"...","kcal":0,"prot":0,"carbs":0,"fat":0,"descripcion":"..."}`;
 
-Considera que es comida peruana/latinoamericana si aplica.
-Responde SOLO en este formato JSON (sin markdown):
-{"nombre":"...","kcal":0,"prot":0,"carbs":0,"fat":0,"descripcion":"..."}`;
-
-    const result = await sample(prompt, {
-      images: [photoBlob],
-      modelTier: 'default',
-      onText: ({text}) => { res.textContent = text; }
-    });
-
-    // Parse JSON
-    const jsonStr = result.text.trim();
+    const text = await callGemini(prompt, photoBlob);
+    const jsonStr = text.trim();
     const data = JSON.parse(jsonStr.startsWith('{') ? jsonStr : jsonStr.match(/\{[\s\S]*\}/)[0]);
     aiResult = data;
     res.textContent = `✅ ${data.nombre}\n📊 ${data.kcal} kcal\n🥩 Proteína: ${data.prot}g  🍚 Carbos: ${data.carbs}g  🫒 Grasas: ${data.fat}g\n💬 ${data.descripcion}`;
     btn.textContent = '✅ Analizado — puedes editar y agregar';
     btn.disabled = false;
   } catch(err) {
-    if (err.message === 'no_images') {
-      res.textContent = '⚠️ El análisis de fotos requiere permisos. Usa entrada manual o recarga la página.';
+    if (err.message !== 'no_key') {
+      res.textContent = '⚠️ No pude analizar la foto. Intenta con imagen más clara o usa entrada manual.';
+      btn.textContent = '🔄 Reintentar';
+      btn.disabled = false;
     } else {
-      res.textContent = '⚠️ No pude analizar la foto. Intenta con una imagen más clara o usa entrada manual.';
+      res.textContent = '';
+      res.classList.remove('show');
+      btn.textContent = '📷 Analizar con IA';
+      btn.disabled = false;
     }
-    btn.textContent = '🔄 Reintentar';
-    btn.disabled = false;
   }
 }
 
 async function analyzeText() {
   const name = document.getElementById('aiTextName').value.trim();
   if (!name) { showToast('Escribe qué comiste'); return; }
-  if (!sample) { showToast('IA no disponible, usa entrada manual'); return; }
 
   const qty = document.getElementById('aiTextQty').value.trim();
   const btn = document.getElementById('aiTextBtn');
@@ -1309,31 +1352,32 @@ async function analyzeText() {
   btn.disabled = true;
   btn.innerHTML = '<span class="spinner"></span> Estimando<span class="thinking-dots"></span>';
   res.classList.add('show');
-  res.textContent = '';
+  res.textContent = 'Consultando Gemini...';
 
   try {
     const prompt = `Eres un nutricionista experto en comida peruana y latinoamericana.
 El usuario comió: "${name}"${qty ? ` (porción: ${qty})` : ''}.
-Estima los valores nutricionales para esa porción específica.
-Si hay ambigüedad de cantidad, asume una porción estándar típica.
-Responde SOLO en este formato JSON (sin markdown ni texto adicional):
-{"nombre":"...","kcal":0,"prot":0,"carbs":0,"fat":0,"descripcion":"breve nota sobre la estimación"}`;
+Estima los valores nutricionales. Si hay ambigüedad de cantidad, asume porción estándar.
+Responde SOLO en JSON (sin markdown): {"nombre":"...","kcal":0,"prot":0,"carbs":0,"fat":0,"descripcion":"breve nota"}`;
 
-    const result = await sample(prompt, {
-      modelTier: 'default',
-      onText: ({text}) => { res.textContent = text; }
-    });
-
-    const jsonStr = result.text.trim();
+    const text = await callGemini(prompt, null);
+    const jsonStr = text.trim();
     const data = JSON.parse(jsonStr.startsWith('{') ? jsonStr : jsonStr.match(/\{[\s\S]*\}/)[0]);
     aiResult = data;
     res.textContent = `✅ ${data.nombre}\n📊 ${data.kcal} kcal\n🥩 Proteína: ${data.prot}g  🍚 Carbos: ${data.carbs}g  🫒 Grasas: ${data.fat}g\n💬 ${data.descripcion}`;
     btn.textContent = '✅ Estimado — toca Agregar';
     btn.disabled = false;
   } catch(err) {
-    res.textContent = '⚠️ No pude estimar. Intenta ser más específico o usa entrada manual.';
-    btn.textContent = '🔄 Reintentar';
-    btn.disabled = false;
+    if (err.message !== 'no_key') {
+      res.textContent = '⚠️ No pude estimar. Intenta ser más específico o usa entrada manual.';
+      btn.textContent = '🔄 Reintentar';
+      btn.disabled = false;
+    } else {
+      res.textContent = '';
+      res.classList.remove('show');
+      btn.textContent = '🤖 Estimar calorías con IA';
+      btn.disabled = false;
+    }
   }
 }
 
